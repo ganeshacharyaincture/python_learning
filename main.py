@@ -1,5 +1,9 @@
 from pydantic import BaseModel
+from collections.abc import Callable
 from langchain.agents import create_agent
+from langchain.agents.middleware import wrap_tool_call
+from langchain.messages import ToolMessage
+from langchain.tools.tool_node import ToolCallRequest
 from dotenv import load_dotenv,find_dotenv
 from langchain.tools import tool
 import requests
@@ -12,6 +16,20 @@ token = os.environ["TOPAS_TOKEN"]
 class Answer(BaseModel):
     summary: str
     confidence: float
+
+@wrap_tool_call
+def handle_tool_errors(
+    request: ToolCallRequest,
+    handler: Callable[[ToolCallRequest], ToolMessage],
+) -> ToolMessage:
+    """Convert tool exceptions into ToolMessages the model can handle."""
+    try:
+        return handler(request)
+    except Exception as e:
+        return ToolMessage(
+            content=f"Tool error: Please check your input and try again. ({e})",
+            tool_call_id=request.tool_call["id"],
+        )
 
 @tool
 def find_grade(employee_name: str) -> str:
@@ -50,7 +68,15 @@ def find_employee_details(employee_code: str) -> str:
 
 tools = [find_all_employees]
 
-agent = create_agent(model="openai:gpt-4.1", tools=tools, response_format=Answer, system_prompt="You are a helpful assistant. Be concise and accurate.")
-result = agent.invoke({"messages": [{"role": "user", "content": "How many employees are there in Incture"}]})
+agent = create_agent(
+    model="openai:gpt-4.1",
+    tools=tools,
+    response_format=Answer,
+    middleware=[handle_tool_errors]
+)
+
+result = agent.invoke({
+    "messages": [{"role": "user", "content": "How many employees are there in Incture"}]
+})
 
 print(result["structured_response"])
